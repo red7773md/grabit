@@ -1,0 +1,6 @@
+{
+  "name": "GrabIt",
+  "description": "Fast, organized media downloader for videos, music, and photos from social platforms.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
