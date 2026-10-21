@@ -1,5 +1,13 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -8,6 +16,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -18,47 +27,112 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.DownloadItem
 import com.example.model.MediaType
 import com.example.model.Platform
-import com.example.ui.components.CompletedDownloadCard
-import com.example.ui.components.DownloadGridCard
-import com.example.ui.components.PlatformChip
+import com.example.ui.components.*
 import com.example.ui.theme.GrabItCoral
 import com.example.ui.theme.GrabItIndigo
 
+private val TabularNumStyle = TextStyle(fontFeatureSettings = "tnum")
+
 @Composable
 fun HistoryScreen(
-    items: List<DownloadItem>,
+    historyItems: List<DownloadItem>,
     searchQuery: String,
     selectedPlatform: Platform?,
     selectedMediaType: MediaType?,
     isGridLayout: Boolean,
+    isSelectionMode: Boolean,
+    selectedIds: Set<String>,
     onSearchChange: (String) -> Unit,
     onPlatformSelect: (Platform?) -> Unit,
     onMediaTypeSelect: (MediaType?) -> Unit,
     onToggleLayout: () -> Unit,
+    onToggleSelectionMode: () -> Unit,
+    onToggleItemSelection: (String) -> Unit,
+    onSelectAllFiltered: (List<String>) -> Unit,
+    onClearSelection: () -> Unit,
+    onBatchDeleteSelected: () -> Unit,
+    onBatchShareSelected: () -> Unit,
     onOpenItem: (DownloadItem) -> Unit,
     onShareItem: (DownloadItem) -> Unit,
     onDeleteItem: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Filter the items according to search, platform, and media type
-    val filteredItems = remember(items, searchQuery, selectedPlatform, selectedMediaType) {
-        items.filter { item ->
-            val matchesQuery = searchQuery.isBlank() ||
+    var showBatchDeleteConfirm by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = isSelectionMode) {
+        onClearSelection()
+    }
+
+    val filteredItems = remember(historyItems, searchQuery, selectedPlatform, selectedMediaType) {
+        historyItems.filter { item ->
+            val matchesSearch = searchQuery.isBlank() ||
                     item.title.contains(searchQuery, ignoreCase = true) ||
-                    item.platform.displayName.contains(searchQuery, ignoreCase = true) ||
-                    item.author.contains(searchQuery, ignoreCase = true)
-
+                    item.author.contains(searchQuery, ignoreCase = true) ||
+                    item.platform.displayName.contains(searchQuery, ignoreCase = true)
             val matchesPlatform = selectedPlatform == null || item.platform == selectedPlatform
-            val matchesMediaType = selectedMediaType == null || item.mediaType == selectedMediaType
-
-            matchesQuery && matchesPlatform && matchesMediaType
+            val matchesType = selectedMediaType == null || item.mediaType == selectedMediaType
+            matchesSearch && matchesPlatform && matchesType
         }
+    }
+
+    val totalSize = remember(filteredItems) {
+        filteredItems.sumOf { it.fileSize }
+    }
+
+    val selectedSize = remember(historyItems, selectedIds) {
+        historyItems.filter { it.id in selectedIds }.sumOf { it.fileSize }
+    }
+
+    val allFilteredSelected = remember(filteredItems, selectedIds) {
+        filteredItems.isNotEmpty() && selectedIds.containsAll(filteredItems.map { it.id })
+    }
+
+    if (showBatchDeleteConfirm && selectedIds.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { showBatchDeleteConfirm = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.DeleteForever,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = {
+                Text(
+                    text = "Delete ${selectedIds.size} Selected Files?",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "This will permanently remove ${selectedIds.size} media files (${DownloadItem.formatBytes(selectedSize)}) from your device storage and history."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showBatchDeleteConfirm = false
+                        onBatchDeleteSelected()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.testTag("confirm_batch_delete_btn")
+                ) {
+                    Text("Delete Permanently")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchDeleteConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 
     Column(
@@ -66,165 +140,302 @@ fun HistoryScreen(
             .fillMaxSize()
             .testTag("history_screen_content")
     ) {
-        // --- 1. SEARCH BAR ---
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+        // --- CONTEXTUAL MULTI-SELECT BATCH BAR ---
+        AnimatedVisibility(
+            visible = isSelectionMode,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut()
         ) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = onSearchChange,
+            Surface(
+                color = GrabItIndigo.copy(alpha = 0.16f),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("history_search_field"),
-                placeholder = {
-                    Text(
-                        text = "Search downloaded files, platforms, or creators...",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                    )
-                },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Default.Search,
-                        contentDescription = "Search",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                },
-                trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { onSearchChange("") }) {
+                    .testTag("batch_selection_bar")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        IconButton(
+                            onClick = onClearSelection,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("close_selection_mode_btn")
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
-                                contentDescription = "Clear search",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
+                                contentDescription = "Exit selection mode",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "${selectedIds.size} selected",
+                                style = TabularNumStyle,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = DownloadItem.formatBytes(selectedSize),
+                                style = TabularNumStyle,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
-                },
-                shape = RoundedCornerShape(14.dp),
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = GrabItCoral,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-                )
-            )
-        }
 
-        // --- 2. MEDIA TYPE TABS (All, Videos, Music, Photos) ---
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            val typeTabs = listOf(
-                Pair("All", null),
-                Pair("Videos", MediaType.VIDEO),
-                Pair("Music", MediaType.AUDIO),
-                Pair("Photos", MediaType.PHOTO)
-            )
-
-            typeTabs.forEach { (label, type) ->
-                val isSelected = selectedMediaType == type
-                FilterChip(
-                    selected = isSelected,
-                    onClick = { onMediaTypeSelect(type) },
-                    label = {
-                        Text(
-                            text = label,
-                            fontSize = 12.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                        )
-                    },
-                    leadingIcon = {
-                        when (type) {
-                            MediaType.VIDEO -> Icon(Icons.Default.Videocam, contentDescription = null, modifier = Modifier.size(14.dp))
-                            MediaType.AUDIO -> Icon(Icons.Default.Audiotrack, contentDescription = null, modifier = Modifier.size(14.dp))
-                            MediaType.PHOTO -> Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(14.dp))
-                            null -> Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        TextButton(
+                            onClick = { onSelectAllFiltered(filteredItems.map { it.id }) },
+                            modifier = Modifier.testTag("select_all_history_btn")
+                        ) {
+                            Icon(
+                                imageVector = if (allFilteredSelected) Icons.Default.Deselect else Icons.Default.SelectAll,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (allFilteredSelected) "None" else "All",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
-                    },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = GrabItCoral.copy(alpha = 0.18f),
-                        selectedLabelColor = GrabItCoral,
-                        selectedLeadingIconColor = GrabItCoral
-                    ),
-                    modifier = Modifier.testTag("media_filter_chip_$label")
-                )
+
+                        IconButton(
+                            onClick = onBatchShareSelected,
+                            enabled = selectedIds.isNotEmpty(),
+                            modifier = Modifier
+                                .size(38.dp)
+                                .testTag("batch_share_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Share selected",
+                                tint = if (selectedIds.isNotEmpty()) GrabItIndigo else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = { showBatchDeleteConfirm = true },
+                            enabled = selectedIds.isNotEmpty(),
+                            modifier = Modifier
+                                .size(38.dp)
+                                .testTag("batch_delete_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Delete selected",
+                                tint = if (selectedIds.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                            )
+                        }
+                    }
+                }
             }
         }
 
-        // --- 3. PLATFORM FILTER CHIPS ROW ---
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+        // --- TOP FILTER & SEARCH HEADER ---
+        Surface(
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 1.dp,
+            modifier = Modifier.fillMaxWidth()
         ) {
-            // "All Platforms" chip
-            FilterChip(
-                selected = selectedPlatform == null,
-                onClick = { onPlatformSelect(null) },
-                label = { Text("All Platforms", fontSize = 12.sp) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = GrabItIndigo.copy(alpha = 0.18f),
-                    selectedLabelColor = GrabItIndigo
-                )
-            )
-
-            // Individual Platform Chips
-            Platform.entries.filter { it != Platform.OTHER }.forEach { platform ->
-                val count = items.count { it.platform == platform }
-                PlatformChip(
-                    platform = platform,
-                    isSelected = selectedPlatform == platform,
-                    onClick = {
-                        onPlatformSelect(if (selectedPlatform == platform) null else platform)
-                    },
-                    count = if (count > 0) count else null,
-                    modifier = Modifier.testTag("platform_chip_${platform.name}")
-                )
-            }
-        }
-
-        // --- 4. RESULTS HEADER & GRID/LIST TOGGLE ---
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "${filteredItems.size} ${if (filteredItems.size == 1) "item" else "items"} saved",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    onClick = onToggleLayout,
-                    modifier = Modifier.size(36.dp).testTag("toggle_history_layout_btn")
+            Column(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(
-                        imageVector = if (isGridLayout) Icons.Default.ViewList else Icons.Default.GridView,
-                        contentDescription = if (isGridLayout) "Switch to List View" else "Switch to Grid View",
-                        tint = GrabItIndigo,
-                        modifier = Modifier.size(20.dp)
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = onSearchChange,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(50.dp)
+                            .testTag("history_search_field"),
+                        placeholder = {
+                            Text(
+                                text = "Search title, creator, or platform...",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = "Search",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { onSearchChange("") },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Clear search",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = GrabItCoral,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                        )
+                    )
+
+                    if (historyItems.isNotEmpty()) {
+                        Surface(
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .border(
+                                    width = 1.dp,
+                                    color = if (isSelectionMode) GrabItCoral else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                    shape = RoundedCornerShape(14.dp)
+                                ),
+                            color = if (isSelectionMode) GrabItCoral.copy(alpha = 0.15f)
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            IconButton(
+                                onClick = onToggleSelectionMode,
+                                modifier = Modifier.testTag("toggle_selection_mode_btn")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Checklist,
+                                    contentDescription = "Batch Select Mode",
+                                    tint = if (isSelectionMode) GrabItCoral else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+
+                    // Toggle Grid/List Button
+                    Surface(
+                        modifier = Modifier
+                            .size(50.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .border(
+                                width = 1.dp,
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                shape = RoundedCornerShape(14.dp)
+                            ),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        IconButton(
+                            onClick = onToggleLayout,
+                            modifier = Modifier.testTag("toggle_history_layout_btn")
+                        ) {
+                            Icon(
+                                imageVector = if (isGridLayout) Icons.Default.ViewList else Icons.Default.GridView,
+                                contentDescription = "Toggle Layout",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+
+                // Media Type Filter Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = selectedMediaType == null,
+                        onClick = { onMediaTypeSelect(null) },
+                        label = { Text("All Types", fontSize = 12.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = GrabItCoral,
+                            selectedLabelColor = Color.White
+                        )
+                    )
+                    MediaType.entries.forEach { type ->
+                        FilterChip(
+                            selected = selectedMediaType == type,
+                            onClick = { onMediaTypeSelect(type) },
+                            label = { Text(type.shortLabel, fontSize = 12.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = GrabItCoral,
+                                selectedLabelColor = Color.White
+                            ),
+                            modifier = Modifier.testTag("history_type_filter_${type.name}")
+                        )
+                    }
+                }
+
+                // Platform Filter Chips Scrollable Row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilterChip(
+                        selected = selectedPlatform == null,
+                        onClick = { onPlatformSelect(null) },
+                        label = { Text("All Platforms", fontSize = 12.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = GrabItIndigo,
+                            selectedLabelColor = Color.White
+                        )
+                    )
+                    Platform.entries.filter { it != Platform.OTHER }.forEach { platform ->
+                        PlatformChip(
+                            platform = platform,
+                            isSelected = selectedPlatform == platform,
+                            onClick = { onPlatformSelect(platform) }
+                        )
+                    }
+                }
+
+                // Summary bar
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Showing ${filteredItems.size} of ${historyItems.size} items",
+                        style = TabularNumStyle,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Total Size: ${DownloadItem.formatBytes(totalSize)}",
+                        style = TabularNumStyle,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = GrabItIndigo
                     )
                 }
             }
         }
 
-        // --- 5. GRID OR LIST VIEW ---
+        // --- CONTENT LIST OR GRID ---
         if (filteredItems.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -236,20 +447,32 @@ fun HistoryScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.FolderOpen,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                        modifier = Modifier.size(54.dp)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(64.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FolderOff,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(32.dp)
+                        )
+                    }
                     Text(
-                        text = "No Downloads Found",
-                        fontSize = 16.sp,
+                        text = if (historyItems.isEmpty()) "No Downloads Yet" else "No Matching Downloads",
+                        fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "Try adjusting your filters or search terms, or paste a new link on Home.",
+                        text = if (historyItems.isEmpty()) {
+                            "Media files you download will appear here with search, platform filters, and batch management."
+                        } else {
+                            "Try adjusting your search or filter chips above."
+                        },
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -281,7 +504,11 @@ fun HistoryScreen(
                             item = item,
                             onOpen = { onOpenItem(item) },
                             onShare = { onShareItem(item) },
-                            onDelete = { onDeleteItem(item.id) }
+                            onDelete = { onDeleteItem(item.id) },
+                            isSelectionMode = isSelectionMode,
+                            isSelected = item.id in selectedIds,
+                            onToggleSelect = { onToggleItemSelection(item.id) },
+                            onLongClick = { onToggleItemSelection(item.id) }
                         )
                     }
                 }
@@ -296,7 +523,11 @@ fun HistoryScreen(
                             item = item,
                             onOpen = { onOpenItem(item) },
                             onShare = { onShareItem(item) },
-                            onDelete = { onDeleteItem(item.id) }
+                            onDelete = { onDeleteItem(item.id) },
+                            isSelectionMode = isSelectionMode,
+                            isSelected = item.id in selectedIds,
+                            onToggleSelect = { onToggleItemSelection(item.id) },
+                            onLongClick = { onToggleItemSelection(item.id) }
                         )
                     }
                 }

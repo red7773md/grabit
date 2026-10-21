@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
@@ -32,6 +33,7 @@ fun GrabItTopBar(
     activeDownloadsCount: Int = 0,
     isDarkTheme: Boolean = true,
     onToggleTheme: () -> Unit = {},
+    onAboutClick: () -> Unit = {},
     onDownloadsClick: () -> Unit = {}
 ) {
     TopAppBar(
@@ -123,6 +125,18 @@ fun GrabItTopBar(
                         )
                     }
                 }
+            }
+
+            // About & Supported URLs button
+            IconButton(
+                onClick = onAboutClick,
+                modifier = Modifier.testTag("about_page_top_btn")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = "About & Supported URLs",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             // Dark/Light Theme toggle

@@ -43,24 +43,31 @@ fun OnboardingScreen(
     val slides = listOf(
         OnboardingSlide(
             title = "Grab Any Social Media",
-            subtitle = "Download videos, reels, stories, music, and photos directly from YouTube, Instagram, TikTok, Facebook, Twitter/X, Reddit, Pinterest, and Snapchat.",
+            subtitle = "Download videos, reels, music tracks, and photos directly into your private offline vault with live speed telemetry.",
             icon = Icons.Default.CloudDownload,
-            badge = "8+ PLATFORMS",
+            badge = "UNIVERSAL VAULT",
             accentColors = listOf(GrabItCoral, GrabItCoralLight, Color(0xFFFF7675))
         ),
         OnboardingSlide(
-            title = "Videos, Music & Photos",
-            subtitle = "Choose exactly what you want: crystal-clear 1080p/4K Video, rich 320kbps MP3 Audio / Music soundtracks, or Original High-Res Photos.",
-            icon = Icons.Default.Audiotrack,
-            badge = "ALL FORMATS",
+            title = "Supported Platforms",
+            subtitle = "Built-in stream engines for YouTube, YouTube Music, Facebook, Twitter/X, Instagram, TikTok, Reddit, Pinterest, and SoundCloud.",
+            icon = Icons.Default.Language,
+            badge = "10+ PLATFORMS",
             accentColors = listOf(GrabItIndigo, GrabItIndigoLight, Color(0xFF6C5CE7))
         ),
         OnboardingSlide(
-            title = "Auto-Organized Folders",
-            subtitle = "Share any link to GrabIt or paste directly. Media is automatically sorted into clean local folders on your device ready for offline enjoyment.",
+            title = "Videos, Music & Photos",
+            subtitle = "Choose your preferred capture format: crystal-clear 1080p Video, rich 320kbps MP3 Audio / Soundtracks, or Original High-Res Photos.",
+            icon = Icons.Default.Audiotrack,
+            badge = "ALL FORMATS",
+            accentColors = listOf(GrabItTeal, GrabItTealLight, Color(0xFF00CEC9))
+        ),
+        OnboardingSlide(
+            title = "Instant Share Sheet & Folders",
+            subtitle = "Tap Share in YouTube, Instagram, X, or any browser and pick GrabIt to start downloading instantly, auto-sorted into clean device folders.",
             icon = Icons.Default.FolderSpecial,
             badge = "SMART STORAGE",
-            accentColors = listOf(GrabItTeal, GrabItTealLight, Color(0xFF00CEC9))
+            accentColors = listOf(GrabItCoral, GrabItIndigo, Color(0xFFE65100))
         )
     )
 
@@ -74,7 +81,7 @@ fun OnboardingScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(24.dp),
+                .padding(horizontal = 20.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
@@ -103,37 +110,106 @@ fun OnboardingScreen(
             // Center Visual & Text
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(28.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
                 modifier = Modifier.weight(1f, fill = false)
             ) {
-                // Feature Hero Badge & Graphic
-                Box(
-                    modifier = Modifier
-                        .size(190.dp)
-                        .clip(RoundedCornerShape(38.dp))
-                        .background(Brush.linearGradient(currentSlide.accentColors)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    // Outer decorative rings
+                if (currentPage == 1) {
+                    // Dedicated Platforms Showcase Grid for Slide 1
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(24.dp)),
+                        shape = RoundedCornerShape(24.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "VERIFIED COMPATIBILITY",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 1.sp,
+                                color = GrabItIndigoLight
+                            )
+                            val showcasePlatforms = listOf(
+                                "YouTube" to Color(0xFFFF0000),
+                                "YT Music" to Color(0xFFCC0000),
+                                "Instagram" to Color(0xFFE1306C),
+                                "TikTok" to Color(0xFF00F2FE),
+                                "Twitter / X" to Color(0xFF1DA1F2),
+                                "Facebook" to Color(0xFF1877F2),
+                                "Reddit" to Color(0xFFFF4500),
+                                "SoundCloud" to Color(0xFFFF5500)
+                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                showcasePlatforms.chunked(2).forEach { rowItems ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        rowItems.forEach { (name, color) ->
+                                            Surface(
+                                                modifier = Modifier.weight(1f),
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = color.copy(alpha = 0.15f)
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(8.dp)
+                                                            .clip(CircleShape)
+                                                            .background(color)
+                                                    )
+                                                    Text(
+                                                        text = name,
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = MaterialTheme.colorScheme.onSurface,
+                                                        maxLines = 1
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Feature Hero Badge & Graphic
                     Box(
                         modifier = Modifier
-                            .size(160.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.12f))
-                    )
-                    Box(
-                        modifier = Modifier
-                            .size(120.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.18f)),
+                            .size(170.dp)
+                            .clip(RoundedCornerShape(36.dp))
+                            .background(Brush.linearGradient(currentSlide.accentColors)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = currentSlide.icon,
-                            contentDescription = currentSlide.title,
-                            tint = Color.White,
-                            modifier = Modifier.size(60.dp)
+                        Box(
+                            modifier = Modifier
+                                .size(140.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.12f))
                         )
+                        Box(
+                            modifier = Modifier
+                                .size(100.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.18f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = currentSlide.icon,
+                                contentDescription = currentSlide.title,
+                                tint = Color.White,
+                                modifier = Modifier.size(52.dp)
+                            )
+                        }
                     }
                 }
 
@@ -151,6 +227,7 @@ fun OnboardingScreen(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
                     )
                 }
+
 
                 // Titles
                 Column(

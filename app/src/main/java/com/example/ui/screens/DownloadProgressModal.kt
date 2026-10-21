@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -22,21 +23,31 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.model.DownloadItem
 import com.example.model.DownloadStatus
+import com.example.model.MediaType
 import com.example.ui.components.GrabItCircularProgressIndicator
 import com.example.ui.components.PlatformBadge
+import com.example.ui.theme.GrabItAmber
 import com.example.ui.theme.GrabItCoral
 import com.example.ui.theme.GrabItIndigo
 import com.example.ui.theme.GrabItTeal
 
+private val TabularNumStyle = TextStyle(fontFeatureSettings = "tnum")
+
 @Composable
 fun DownloadProgressModal(
     item: DownloadItem,
+    downloadFolderPath: String,
     onPauseResume: () -> Unit,
     onCancel: () -> Unit,
     onDownloadInBackground: () -> Unit,
+    onOpenMedia: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isFailed = item.status == DownloadStatus.FAILED
+    val isPaused = item.status == DownloadStatus.PAUSED
+    val isCompleted = item.status == DownloadStatus.COMPLETED
+
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = modifier
@@ -44,7 +55,8 @@ fun DownloadProgressModal(
                 .clip(RoundedCornerShape(24.dp))
                 .border(
                     width = 1.dp,
-                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                    color = if (isFailed) MaterialTheme.colorScheme.error.copy(alpha = 0.6f)
+                            else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
                     shape = RoundedCornerShape(24.dp)
                 )
                 .testTag("download_progress_modal"),
@@ -73,12 +85,23 @@ fun DownloadProgressModal(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(if (item.status == DownloadStatus.PAUSED) Color(0xFFFFA502) else GrabItCoral)
+                                .background(
+                                    when {
+                                        isFailed -> MaterialTheme.colorScheme.error
+                                        isPaused -> GrabItAmber
+                                        isCompleted -> GrabItTeal
+                                        else -> GrabItCoral
+                                    }
+                                )
                         )
                         Text(
-                            text = if (item.status == DownloadStatus.PAUSED) "Download Paused"
-                                   else if (item.status == DownloadStatus.COMPLETED) "Download Complete"
-                                   else "Downloading Media",
+                            text = when (item.status) {
+                                DownloadStatus.PAUSED -> "Download Paused"
+                                DownloadStatus.QUEUED -> "Queued for Download"
+                                DownloadStatus.COMPLETED -> "Download Complete"
+                                DownloadStatus.FAILED -> "Download Interrupted"
+                                else -> "Streaming Media"
+                            },
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -87,7 +110,9 @@ fun DownloadProgressModal(
 
                     IconButton(
                         onClick = onDismiss,
-                        modifier = Modifier.size(28.dp).testTag("close_progress_modal_btn")
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("close_progress_modal_btn")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
@@ -137,6 +162,22 @@ fun DownloadProgressModal(
                     }
                 }
 
+                if (isFailed && !item.errorMessage.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.error.copy(alpha = 0.12f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = item.errorMessage,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.error,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                }
+
                 // Metrics Grid (Speed, Downloaded/Total, ETA)
                 Row(
                     modifier = Modifier
@@ -148,26 +189,40 @@ fun DownloadProgressModal(
                 ) {
                     MetricColumn(
                         label = "Speed",
-                        value = if (item.status == DownloadStatus.PAUSED) "0 KB/s" else item.downloadSpeed,
+                        value = if (isPaused || isFailed) "0 B/s" else item.downloadSpeed,
                         color = GrabItTeal
                     )
-                    VerticalDivider(modifier = Modifier.height(30.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    VerticalDivider(
+                        modifier = Modifier.height(30.dp),
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                    )
                     MetricColumn(
-                        label = "Downloaded",
-                        value = "${item.formattedDownloadedSize} / ${item.formattedFileSize}",
+                        label = "Transferred",
+                        value = if (item.fileSize > 0L) {
+                            "${item.formattedDownloadedSize} / ${item.formattedFileSize}"
+                        } else {
+                            item.formattedDownloadedSize
+                        },
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                    VerticalDivider(modifier = Modifier.height(30.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    VerticalDivider(
+                        modifier = Modifier.height(30.dp),
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                    )
                     MetricColumn(
-                        label = "Remaining",
-                        value = if (item.status == DownloadStatus.PAUSED) "Paused" else item.timeRemaining.ifEmpty { "10s" },
-                        color = GrabItIndigo
+                        label = "Status",
+                        value = when {
+                            isPaused -> "Paused"
+                            isFailed -> "Failed"
+                            else -> item.timeRemaining.ifEmpty { "Streaming" }
+                        },
+                        color = if (isFailed) MaterialTheme.colorScheme.error else GrabItIndigo
                     )
                 }
 
                 // Destination Folder Path
                 Text(
-                    text = "Saving to: /storage/emulated/0/Download/${item.localPath}",
+                    text = "Saving to: $downloadFolderPath/${item.platform.subfolder}/${item.mediaType.subfolder}",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     textAlign = TextAlign.Center,
@@ -180,64 +235,111 @@ fun DownloadProgressModal(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Download in Background Button
-                    Button(
-                        onClick = onDownloadInBackground,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("download_in_background_btn"),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = GrabItIndigo)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Text("Download in Background", fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-
-                    // Pause/Resume and Cancel Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = onPauseResume,
+                    if (isCompleted) {
+                        Button(
+                            onClick = onOpenMedia,
                             modifier = Modifier
-                                .weight(1f)
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .testTag("modal_open_media_btn"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = GrabItCoral)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (item.mediaType == MediaType.VIDEO) Icons.Default.PlayArrow else Icons.Default.Visibility,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = if (item.mediaType == MediaType.VIDEO) "Play Video Now" else "Open Media Now",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        OutlinedButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .fillMaxWidth()
                                 .height(46.dp)
-                                .testTag("modal_pause_resume_btn"),
+                                .testTag("modal_done_btn"),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Icon(
-                                imageVector = if (item.status == DownloadStatus.PAUSED) Icons.Default.PlayArrow else Icons.Default.Pause,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = if (item.status == DownloadStatus.PAUSED) "Resume" else "Pause",
-                                fontSize = 13.sp
-                            )
+                            Text("Done", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    } else {
+                        if (!isFailed) {
+                            Button(
+                                onClick = onDownloadInBackground,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("download_in_background_btn"),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = GrabItIndigo)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Text("Continue in Background", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
 
-                        OutlinedButton(
-                            onClick = onCancel,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(46.dp)
-                                .testTag("modal_cancel_btn"),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = MaterialTheme.colorScheme.error
-                            )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Cancel", fontSize = 13.sp)
+                            OutlinedButton(
+                                onClick = onPauseResume,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(46.dp)
+                                    .testTag("modal_pause_resume_btn"),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = when {
+                                        isFailed -> Icons.Default.Refresh
+                                        isPaused -> Icons.Default.PlayArrow
+                                        else -> Icons.Default.Pause
+                                    },
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = when {
+                                        isFailed -> "Retry"
+                                        isPaused -> "Resume"
+                                        else -> "Pause"
+                                    },
+                                    fontSize = 13.sp
+                                )
+                            }
+
+                            OutlinedButton(
+                                onClick = onCancel,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(46.dp)
+                                    .testTag("modal_cancel_btn"),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error
+                                )
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Cancel", fontSize = 13.sp)
+                            }
                         }
                     }
                 }
@@ -260,6 +362,7 @@ private fun MetricColumn(
         )
         Text(
             text = value,
+            style = TabularNumStyle,
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             color = color
