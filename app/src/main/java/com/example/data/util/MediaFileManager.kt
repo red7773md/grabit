@@ -508,8 +508,10 @@ object MediaFileManager {
             MediaType.VIDEO -> {
                 val height = ytDlpHeight(item.quality)
                 val limit = if (height != null) "[height<=$height]" else ""
-                // Prefer MP4/M4A streams so they can be merged without re-encoding.
-                request.addOption("-f", "bv*[ext=mp4]$limit+ba[ext=m4a]/bv*$limit+ba/b$limit/best")
+                // Highest resolution up to the selected height. Don't force MP4 streams: YouTube serves
+                // 1440p and 4K mostly as WebM/VP9 or AV1, so an MP4-first rule would cap quality.
+                // yt-dlp sorts the formats, and FFmpeg merges the result into MP4.
+                request.addOption("-f", "bv*$limit+ba/b$limit/best")
                 request.addOption("--merge-output-format", "mp4")
             }
             MediaType.AUDIO -> {

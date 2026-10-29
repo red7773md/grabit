@@ -67,7 +67,8 @@ MainActivity            Receives share intents (text/plain), hosts Compose UI
 
 - Library: `io.github.junkfood02.youtubedl-android` 0.18.1 (`library` and `ffmpeg` artifacts). It bundles yt-dlp, Python and FFmpeg for Android. Source: https://github.com/yausername/youtubedl-android
 - `ensureYtDlpReady` initialises `YoutubeDL` and `FFmpeg` once per process.
-- Video: best MP4 video plus M4A audio, capped at the selected height, merged to MP4.
+- Video: highest-resolution video plus best audio, capped at the selected height, merged to MP4. The format string must not prefer MP4 streams, because YouTube's 1440p and 4K are mostly WebM/AV1.
+- Audio quality ceiling: YouTube's source audio is about 128–160 kbps, so "320 kbps MP3" re-encodes and doesn't add quality. A "best original" option (no re-encode) is not implemented yet.
 - Audio: `-x` with the selected format (MP3 320K or 128K, M4A, or FLAC).
 - Progress: yt-dlp's callback runs on a reader thread, so updates go through a conflated `Channel` to the coroutine.
 - Pause/cancel: when the coroutine job is no longer active, the callback calls `destroyProcessById(item.id)`. yt-dlp resumes partial files on the next start.
