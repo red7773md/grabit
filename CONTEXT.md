@@ -55,25 +55,27 @@ MainActivity            Receives share intents (text/plain), hosts Compose UI
    - HEAD-probe the chosen URL for `Content-Length`.
 3. **Confirm**: a bottom sheet shows the candidate item so the user can change type and quality before starting.
 4. **Download** (`MediaFileManager.streamDownloadMediaFile`):
-   - Picks a "target URL" from the resolved media URL, source URL, or fallback.
-   - Streams to `<name>_<id6>.<ext>.part`, supports HTTP Range resume, emits progress every 200 ms.
-   - Renames `.part` to the final file on success.
+   - Builds candidate links in order: the resolved media URL, then (photos only) the page's preview image, then the link the user gave. YouTube thumbnails are never used as photos.
+   - Tries each candidate in turn. A candidate is saved only if the server answers with media of the selected type (`video/*`, `audio/*` or `image/*`). HTML pages, other media types, HTTP errors and empty bodies are rejected with a message, and the next candidate is tried.
+   - Generic types (`application/octet-stream` and similar) are accepted only when the URL ends in a matching media extension.
+   - Streams to `<name>_<id6>.part` and supports HTTP Range resume. After a network error it retries up to 3 times, resuming from the bytes already written.
+   - Renames `.part` to the final file, using the extension from the Content-Type (then the URL, then the type default).
+   - If nothing works, throws `MediaResolutionException` with a user-facing message. The ViewModel shows it as the download error.
 5. **Persist**: the finished item is saved to Room and shown in History.
 
 ---
 
 ## 3. Known issues
 
-### 3.1 The "same file every time" bug (root cause found)
+### 3.1 The "same file every time" bug (fixed in code, needs device testing)
 
-`MediaFileManager` defines two hard-coded demo files:
+Root cause: `MediaFileManager` had two hard-coded demo files (an MDN sample `flower.mp4` and a SoundHelix sample mp3). Any link that was not a direct file, and any HTTP error or HTML response, silently switched the download to one of these. Every failed link therefore produced the same demo file, which matches the bug report.
 
-- `VERIFIED_MP4_FALLBACK_URL`: an MDN sample video (`flower.mp4`)
-- `VERIFIED_MP3_FALLBACK_URL`: a SoundHelix sample song
+The demo URLs and the silent fallback were removed. Candidates are now checked for the right media type before saving (section 2, step 4).
 
-`streamDownloadMediaFile` uses these whenever the user's link is not a direct file, and `executeDownloadLoop` switches to them on any HTTP error, HTML response, or network exception. The user therefore gets a demo file instead of the file they asked for, or an error that was silently replaced. This is the bug the user reported. `Platform.OTHER.exampleUrl` also points at the same MDN video, so it is used as a sample in the About screen.
+`Platform.OTHER.exampleUrl` still points at the MDN video. It is only a sample link shown in the About screen, not a download source.
 
-**Status**: being fixed (see progress log).
+**Status**: fixed in `MediaFileManager.kt`. Not yet compiled against the Android SDK or OkHttp in this environment. Build and test on a device before relying on it.
 
 ### 3.2 Social platforms can't be downloaded
 
@@ -104,11 +106,12 @@ Downloading from these platforms also usually breaks their terms of service, and
 
 Newest first. Each entry is one pushed step.
 
+- **2026-10-29: Download fix.** Removed the demo-file fallbacks from `MediaFileManager`. Downloads now save only real media of the selected type, check the Content-Type before saving, retry network drops with resume, pick the extension from the real type, and show a clear error when a link has no downloadable file. Compiled the Kotlin syntax with the Kotlin compiler bundled in Gradle: no parse errors. Full type-check and build still need the Android SDK.
 - **2026-10-29: Documentation.** Added `CONTEXT.md` and `README.md`. Reviewed the download pipeline and identified the demo-fallback root cause (section 3.1).
 - **Earlier (before this log):** App scaffold, Compose UI, Room history, share intent, batch mode, and TikTok/oEmbed/OpenGraph metadata were in place. The last commit before this log is `96b61ea feat: improve share intent handling and add tests`.
 
 ### Planned next steps
 
-1. Fix the download pipeline: remove demo-file fallbacks, resolve direct links and HTML media tags correctly, reject HTML responses, and show clear error messages.
+1. Verify the download fix on a device with: a direct mp4, a direct mp3, a direct jpg, a web page with a `<video>` tag, a YouTube link (expect a clear error), and a TikTok link.
 2. Improve the UI for Home, the confirmation sheet, download cards, and history.
-3. Verify builds locally with the Android SDK and add real unit tests for URL resolution and the download path.
+3. Set up the Android SDK in the build environment and add real unit tests for URL resolution and the candidate selection logic.

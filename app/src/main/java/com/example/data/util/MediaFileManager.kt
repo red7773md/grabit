@@ -17,6 +17,7 @@ import com.example.model.Platform
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
@@ -25,6 +26,7 @@ import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -39,16 +41,13 @@ data class StreamProgressUpdate(
     val etaLabel: String
 )
 
+/** A link could not be turned into a downloadable file. The message is meant to be shown to the user. */
+class MediaResolutionException(message: String) : IllegalStateException(message)
+
 object MediaFileManager {
 
     private const val BROWSER_USER_AGENT =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-
-    // Verified high-definition media stream endpoints for protected platform fallback streaming
-    private const val VERIFIED_MP4_FALLBACK_URL =
-        "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4"
-    private const val VERIFIED_MP3_FALLBACK_URL =
-        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -271,9 +270,10 @@ object MediaFileManager {
                             MediaType.VIDEO -> parsed.videoUrl
                         }
 
-                        if (candidateStream.isNotBlank() && isDirectMediaExtension(candidateStream)) {
+                        // The download step checks the real Content-Type, so no file extension is required here.
+                        if (candidateStream.isNotBlank()) {
                             resolvedMediaUrl = candidateStream
-                            isDirectStream = true
+                            isDirectStream = isDirectMediaExtension(candidateStream)
                         }
                     }
                 }
@@ -323,13 +323,13 @@ object MediaFileManager {
     }
 
     /**
-     * Streams the media file over HTTP with real-time byte tracking, speed calculation,
-     * and Range resume support.
+     * Downloads the media file for [item] into the GrabIt folder.
      *
-     * Fallback guarantee: For protected social media web pages (YouTube, Facebook, Twitter, Instagram, etc.)
-     * where bot-protection prevents raw stream dumping directly over plain HTTP, the engine streams a
-     * verified high-definition playable media stream to ensure 100% playable output in MediaPlayerModal
-     * and external galleries without corrupted or HTML files.
+     * Candidate links are tried in order: the resolved media URL first, then the link the user gave.
+     * A candidate is saved only when the server returns media of the selected type. Web pages and
+     * mismatched media are rejected, so GrabIt never saves a placeholder or demo file in their place.
+     *
+     * @throws MediaResolutionException with a user-facing message when no usable file is found.
      */
     suspend fun streamDownloadMediaFile(
         context: Context,
@@ -344,114 +344,117 @@ object MediaFileManager {
             organizeByFolders = organizeByFolders
         )
 
-        val extension = resolveExtensionForItem(item)
         val sanitizedTitle = item.title
             .replace(Regex("[^a-zA-Z0-9._-]"), "_")
             .replace(Regex("_+"), "_")
             .take(40)
             .trim('_')
             .ifEmpty { "grabit_${item.id.take(8)}" }
+        val baseName = "${sanitizedTitle}_${item.id.take(6)}"
+        val partFile = File(targetDir, "$baseName.part")
 
-        val finalFile = File(targetDir, "${sanitizedTitle}_${item.id.take(6)}$extension")
-        val partFile = File(targetDir, "${sanitizedTitle}_${item.id.take(6)}$extension.part")
-
-        // Determine effective download stream URL
-        var downloadTargetUrl = when {
-            item.mediaType == MediaType.PHOTO && item.thumbnailUrl.startsWith("http", ignoreCase = true) -> {
-                item.thumbnailUrl
-            }
-            item.mediaType == MediaType.VIDEO -> {
-                if (isDirectMediaUrl(item.resolvedMediaUrl) || item.resolvedMediaUrl.contains("tiktokcdn")) {
-                    item.resolvedMediaUrl
-                } else if (isDirectMediaUrl(item.sourceUrl)) {
-                    normalizeUrl(item.sourceUrl)
-                } else {
-                    VERIFIED_MP4_FALLBACK_URL
-                }
-            }
-            item.mediaType == MediaType.AUDIO -> {
-                if (isDirectAudioUrl(item.resolvedMediaUrl)) {
-                    item.resolvedMediaUrl
-                } else if (isDirectAudioUrl(item.sourceUrl)) {
-                    normalizeUrl(item.sourceUrl)
-                } else {
-                    VERIFIED_MP3_FALLBACK_URL
-                }
-            }
-            else -> normalizeUrl(item.sourceUrl)
-        }
-
-        executeDownloadLoop(
-            targetUrl = downloadTargetUrl,
+        val saved = downloadFirstMatchingCandidate(
+            candidates = buildDownloadCandidates(item),
             partFile = partFile,
             item = item,
-            onProgress = onProgress,
-            fallbackUrl = if (item.mediaType == MediaType.VIDEO) VERIFIED_MP4_FALLBACK_URL else VERIFIED_MP3_FALLBACK_URL
+            onProgress = onProgress
         )
 
-        if (!partFile.exists() || partFile.length() == 0L) {
-            throw IllegalStateException("No media bytes were received from the URL.")
-        }
-
+        val finalFile = File(targetDir, baseName + extensionFor(saved.contentType, saved.url, item.mediaType))
         if (finalFile.exists()) {
             finalFile.delete()
         }
-        val renamed = partFile.renameTo(finalFile)
-        if (!renamed) {
+        if (!partFile.renameTo(finalFile)) {
             partFile.copyTo(finalFile, overwrite = true)
             partFile.delete()
         }
-
         finalFile
     }
 
-    private suspend fun executeDownloadLoop(
-        targetUrl: String,
+    private fun buildDownloadCandidates(item: DownloadItem): List<String> {
+        val isYouTube = item.platform == Platform.YOUTUBE || item.platform == Platform.YT_MUSIC
+        return buildList {
+            add(item.resolvedMediaUrl)
+            // A YouTube thumbnail is only a card image, never the photo the user asked for.
+            if (item.mediaType == MediaType.PHOTO && !isYouTube) add(item.thumbnailUrl)
+            add(item.sourceUrl)
+        }
+            .filter { it.startsWith("http", ignoreCase = true) }
+            .map { normalizeUrl(it) }
+            .distinct()
+    }
+
+    private sealed interface CandidateResult {
+        data class Saved(val contentType: String) : CandidateResult
+        data class Rejected(val reason: String) : CandidateResult
+    }
+
+    private class SavedCandidate(val url: String, val contentType: String)
+
+    private suspend fun downloadFirstMatchingCandidate(
+        candidates: List<String>,
         partFile: File,
         item: DownloadItem,
-        onProgress: suspend (StreamProgressUpdate) -> Unit,
-        fallbackUrl: String
-    ) {
-        var currentUrl = targetUrl
-        var attempts = 0
+        onProgress: suspend (StreamProgressUpdate) -> Unit
+    ): SavedCandidate {
+        var lastReason = noFileFoundMessage(item.mediaType)
+        for (candidate in candidates) {
+            when (val result = downloadCandidate(candidate, partFile, item, onProgress)) {
+                is CandidateResult.Saved -> return SavedCandidate(candidate, result.contentType)
+                is CandidateResult.Rejected -> {
+                    lastReason = result.reason
+                    if (partFile.exists()) partFile.delete()
+                }
+            }
+        }
+        throw MediaResolutionException(lastReason)
+    }
 
-        while (attempts < 2) {
-            attempts++
+    private fun noFileFoundMessage(mediaType: MediaType): String =
+        "GrabIt couldn't find a downloadable ${mediaType.label.lowercase()} file at this link. " +
+            "Paste a link that points directly to the file."
+
+    /**
+     * Streams one candidate URL into [partFile]. Resumes with an HTTP Range request after network
+     * drops, and returns [CandidateResult.Rejected] (instead of throwing) when this URL is unusable.
+     */
+    private suspend fun downloadCandidate(
+        url: String,
+        partFile: File,
+        item: DownloadItem,
+        onProgress: suspend (StreamProgressUpdate) -> Unit
+    ): CandidateResult {
+        var networkFailures = 0
+        while (true) {
             val existingBytes = if (partFile.exists()) partFile.length() else 0L
             val requestBuilder = Request.Builder()
-                .url(currentUrl)
+                .url(url)
                 .header("User-Agent", BROWSER_USER_AGENT)
                 .header("Accept", "*/*")
-
             if (existingBytes > 0L) {
                 requestBuilder.header("Range", "bytes=$existingBytes-")
             }
 
             try {
                 httpClient.newCall(requestBuilder.build()).execute().use { response ->
-                    val contentType = response.header("Content-Type")?.lowercase() ?: ""
-
-                    // If a social web server returned HTML or 403 when requesting video/audio stream:
-                    if ((contentType.contains("text/html") || response.code == 403 || response.code == 401 || !response.isSuccessful)
-                        && item.mediaType != MediaType.PHOTO
-                        && currentUrl != fallbackUrl
-                    ) {
-                        // Switch to verified fallback media stream
-                        currentUrl = fallbackUrl
-                        if (partFile.exists()) partFile.delete()
-                        return@use // Re-try in outer loop
-                    }
-
                     if (!response.isSuccessful && response.code != 206) {
-                        if (currentUrl != fallbackUrl && item.mediaType != MediaType.PHOTO) {
-                            currentUrl = fallbackUrl
-                            if (partFile.exists()) partFile.delete()
-                            return@use
-                        }
-                        throw IllegalStateException("Server returned HTTP ${response.code} for this link")
+                        return CandidateResult.Rejected(
+                            "The server refused this link (HTTP ${response.code}). " +
+                                "The file may be private or no longer available."
+                        )
                     }
 
-                    val body = response.body ?: throw IllegalStateException("Empty response stream from server")
+                    val contentType = response.header("Content-Type")
+                        .orEmpty()
+                        .lowercase()
+                        .substringBefore(";")
+                        .trim()
+                    mismatchReason(contentType, url, item.mediaType)?.let { reason ->
+                        return CandidateResult.Rejected(reason)
+                    }
+
+                    val body = response.body
+                        ?: return CandidateResult.Rejected("The server sent no data for this link.")
                     val isResumed = response.code == 206 && existingBytes > 0L
                     val contentLength = body.contentLength()
                     val totalBytes = when {
@@ -461,76 +464,71 @@ object MediaFileManager {
                         else -> -1L
                     }
 
-                    val inputStream = body.byteStream()
-                    val outputStream = FileOutputStream(partFile, isResumed)
-
                     val buffer = ByteArray(8 * 1024)
                     var bytesDownloaded = if (isResumed) existingBytes else 0L
                     var lastEmitTimeMs = System.currentTimeMillis()
                     var bytesAtLastEmit = bytesDownloaded
 
-                    try {
-                        while (true) {
-                            currentCoroutineContext().ensureActive()
-                            val read = inputStream.read(buffer)
-                            if (read == -1) break
+                    FileOutputStream(partFile, isResumed).use { output ->
+                        body.byteStream().use { input ->
+                            while (true) {
+                                currentCoroutineContext().ensureActive()
+                                val read = input.read(buffer)
+                                if (read == -1) break
 
-                            outputStream.write(buffer, 0, read)
-                            bytesDownloaded += read
+                                output.write(buffer, 0, read)
+                                bytesDownloaded += read
 
-                            val now = System.currentTimeMillis()
-                            val elapsedSinceLastEmit = now - lastEmitTimeMs
-                            if (elapsedSinceLastEmit >= 200L) {
-                                val deltaBytes = bytesDownloaded - bytesAtLastEmit
-                                val bytesPerSec = if (elapsedSinceLastEmit > 0) {
-                                    (deltaBytes * 1000L) / elapsedSinceLastEmit
-                                } else 0L
+                                val now = System.currentTimeMillis()
+                                val elapsedSinceLastEmit = now - lastEmitTimeMs
+                                if (elapsedSinceLastEmit >= 200L) {
+                                    val deltaBytes = bytesDownloaded - bytesAtLastEmit
+                                    val bytesPerSec = (deltaBytes * 1000L) / elapsedSinceLastEmit
+                                    val progressFraction = if (totalBytes > 0) {
+                                        (bytesDownloaded.toFloat() / totalBytes.toFloat()).coerceIn(0.01f, 0.99f)
+                                    } else {
+                                        0.15f + (bytesDownloaded.toFloat() / (5 * 1024 * 1024f)).coerceAtMost(0.8f)
+                                    }
+                                    val etaStr = if (totalBytes > bytesDownloaded && bytesPerSec > 0) {
+                                        formatEta(((totalBytes - bytesDownloaded) / bytesPerSec).coerceAtLeast(1L))
+                                    } else {
+                                        "Streaming..."
+                                    }
 
-                                val speedStr = "${DownloadItem.formatBytes(bytesPerSec)}/s"
-                                val progressFraction = if (totalBytes > 0) {
-                                    (bytesDownloaded.toFloat() / totalBytes.toFloat()).coerceIn(0.01f, 0.99f)
-                                } else {
-                                    (0.15f + (bytesDownloaded.toFloat() / (5 * 1024 * 1024f)).coerceAtMost(0.8f))
-                                }
-
-                                val etaStr = if (totalBytes > bytesDownloaded && bytesPerSec > 0) {
-                                    val remainingSec = ((totalBytes - bytesDownloaded) / bytesPerSec).coerceAtLeast(1L)
-                                    formatEta(remainingSec)
-                                } else {
-                                    "Streaming..."
-                                }
-
-                                onProgress(
-                                    StreamProgressUpdate(
-                                        downloadedBytes = bytesDownloaded,
-                                        totalBytes = if (totalBytes > 0) totalBytes else bytesDownloaded,
-                                        progress = progressFraction,
-                                        speedLabel = speedStr,
-                                        etaLabel = etaStr
+                                    onProgress(
+                                        StreamProgressUpdate(
+                                            downloadedBytes = bytesDownloaded,
+                                            totalBytes = if (totalBytes > 0) totalBytes else bytesDownloaded,
+                                            progress = progressFraction,
+                                            speedLabel = "${DownloadItem.formatBytes(bytesPerSec)}/s",
+                                            etaLabel = etaStr
+                                        )
                                     )
-                                )
 
-                                lastEmitTimeMs = now
-                                bytesAtLastEmit = bytesDownloaded
+                                    lastEmitTimeMs = now
+                                    bytesAtLastEmit = bytesDownloaded
+                                }
                             }
                         }
-                        outputStream.flush()
-                        return // Download succeeded!
-                    } catch (ce: CancellationException) {
-                        throw ce
-                    } finally {
-                        try { outputStream.close() } catch (_: Exception) {}
-                        try { inputStream.close() } catch (_: Exception) {}
+                        output.flush()
                     }
+
+                    if (partFile.length() == 0L) {
+                        return CandidateResult.Rejected("The server sent an empty file for this link.")
+                    }
+                    return CandidateResult.Saved(contentType)
                 }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                if (attempts < 2 && currentUrl != fallbackUrl && item.mediaType != MediaType.PHOTO) {
-                    currentUrl = fallbackUrl
-                    if (partFile.exists()) partFile.delete()
-                } else {
-                    throw e
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: IOException) {
+                networkFailures++
+                if (networkFailures >= 3) {
+                    return CandidateResult.Rejected(
+                        "Network error while downloading (${e.message ?: "connection lost"}). " +
+                            "Check your connection and try again."
+                    )
                 }
+                delay(2_000L * networkFailures)
             }
         }
     }
@@ -943,27 +941,78 @@ object MediaFileManager {
         }
     }
 
-    private fun resolveExtensionForItem(item: DownloadItem): String {
-        val checkUrl = item.resolvedMediaUrl.ifBlank { item.sourceUrl }.substringBefore("?").lowercase()
-        return when (item.mediaType) {
-            MediaType.VIDEO -> when {
-                checkUrl.endsWith(".webm") -> ".webm"
-                checkUrl.endsWith(".mkv") -> ".mkv"
-                else -> ".mp4"
-            }
-            MediaType.AUDIO -> when {
-                checkUrl.endsWith(".m4a") -> ".m4a"
-                checkUrl.endsWith(".wav") -> ".wav"
-                checkUrl.endsWith(".flac") -> ".flac"
-                else -> ".mp3"
-            }
-            MediaType.PHOTO -> when {
-                checkUrl.endsWith(".png") -> ".png"
-                checkUrl.endsWith(".webp") -> ".webp"
-                checkUrl.endsWith(".gif") -> ".gif"
-                else -> ".jpg"
-            }
+    private fun mimePrefixFor(mediaType: MediaType): String = when (mediaType) {
+        MediaType.VIDEO -> "video/"
+        MediaType.AUDIO -> "audio/"
+        MediaType.PHOTO -> "image/"
+    }
+
+    private fun extensionsFor(mediaType: MediaType): List<String> = when (mediaType) {
+        MediaType.VIDEO -> listOf(".mp4", ".webm", ".mkv", ".mov", ".m4v")
+        MediaType.AUDIO -> listOf(".mp3", ".m4a", ".wav", ".flac", ".ogg", ".aac")
+        MediaType.PHOTO -> listOf(".jpg", ".jpeg", ".png", ".webp", ".gif")
+    }
+
+    private fun hasExtension(url: String, extensions: List<String>): Boolean {
+        val path = url.substringBefore("?").substringBefore("#").lowercase()
+        return extensions.any { path.endsWith(it) }
+    }
+
+    /**
+     * Returns null when the response is the media type the user selected. Otherwise returns a
+     * user-facing reason the candidate was rejected.
+     */
+    private fun mismatchReason(contentType: String, url: String, mediaType: MediaType): String? {
+        val typeName = mediaType.label.lowercase()
+        if (contentType.startsWith(mimePrefixFor(mediaType))) return null
+
+        if (contentType == "text/html" || contentType == "application/xhtml+xml") {
+            return "This link opens a web page, not a $typeName file. " +
+                "GrabIt can only save links that point directly to a file."
         }
+
+        val otherType = MediaType.values().firstOrNull {
+            it != mediaType && contentType.startsWith(mimePrefixFor(it))
+        }
+        if (otherType != null) {
+            return "This link is a ${otherType.label.lowercase()} file. " +
+                "Switch the type to ${otherType.shortLabel} and try again."
+        }
+
+        // Servers often send a generic type for media files. Accept it only when the URL names a matching file.
+        val isGenericType = contentType.isEmpty() ||
+            contentType.startsWith("application/") ||
+            contentType.startsWith("binary/")
+        if (isGenericType && hasExtension(url, extensionsFor(mediaType))) return null
+
+        return "The server didn't identify this link as a $typeName file."
+    }
+
+    /** Chooses the saved file extension from the real Content-Type, then from the URL, then the type default. */
+    private fun extensionFor(contentType: String, url: String, mediaType: MediaType): String {
+        val fromMime = when (contentType) {
+            "video/mp4" -> ".mp4"
+            "video/webm" -> ".webm"
+            "video/quicktime" -> ".mov"
+            "video/x-matroska" -> ".mkv"
+            "video/x-m4v" -> ".m4v"
+            "audio/mpeg", "audio/mp3" -> ".mp3"
+            "audio/mp4", "audio/m4a", "audio/x-m4a" -> ".m4a"
+            "audio/wav", "audio/x-wav" -> ".wav"
+            "audio/flac", "audio/x-flac" -> ".flac"
+            "audio/ogg" -> ".ogg"
+            "audio/aac" -> ".aac"
+            "image/jpeg" -> ".jpg"
+            "image/png" -> ".png"
+            "image/webp" -> ".webp"
+            "image/gif" -> ".gif"
+            else -> null
+        }
+        if (fromMime != null) return fromMime
+
+        val path = url.substringBefore("?").substringBefore("#").lowercase()
+        return extensionsFor(mediaType).firstOrNull { path.endsWith(it) }
+            ?: ".${mediaType.defaultExtension}"
     }
 
     private fun extractFilenameFromDisposition(disposition: String): String? {
