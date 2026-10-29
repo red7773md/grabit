@@ -1,6 +1,7 @@
 package com.example.viewmodel
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.GrabItDatabase
@@ -49,6 +50,7 @@ data class GrabItUiState(
     val currentOnboardingPage: Int = 0,
     val isBatchMode: Boolean = false,
     val isDarkTheme: Boolean = true,
+    val hasYouTubeCookies: Boolean = false,
     val snackbarMessage: String? = null
 )
 
@@ -73,7 +75,8 @@ class GrabItViewModel(application: Application) : AndroidViewModel(application) 
             state.copy(
                 settings = savedSettings,
                 hasSeenOnboarding = seenOnboarding,
-                isDarkTheme = initialDark
+                isDarkTheme = initialDark,
+                hasYouTubeCookies = MediaFileManager.hasYouTubeCookies(application)
             )
         }
 
@@ -959,6 +962,34 @@ class GrabItViewModel(application: Application) : AndroidViewModel(application) 
     // --- Snackbar ---
     fun showSnackbar(message: String) {
         _uiState.update { it.copy(snackbarMessage = message) }
+    }
+
+    /** Reads the picked cookies file, validates it, and stores it in app-private storage. */
+    fun importYouTubeCookies(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            val error = try {
+                val text = app.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
+                if (text == null) {
+                    "Couldn't open the selected file."
+                } else {
+                    MediaFileManager.saveYouTubeCookies(app, text)
+                }
+            } catch (e: Exception) {
+                "Couldn't read the file: ${e.message ?: "unknown error"}"
+            }
+            _uiState.update { it.copy(hasYouTubeCookies = MediaFileManager.hasYouTubeCookies(app)) }
+            showSnackbar(error ?: "YouTube cookies saved.")
+        }
+    }
+
+    fun clearYouTubeCookies() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<Application>()
+            MediaFileManager.deleteYouTubeCookies(app)
+            _uiState.update { it.copy(hasYouTubeCookies = false) }
+            showSnackbar("YouTube cookies removed.")
+        }
     }
 
     fun clearSnackbar() {

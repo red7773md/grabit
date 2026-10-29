@@ -390,6 +390,33 @@ object MediaFileManager {
     /** Netscape-format cookies file that yt-dlp can use for signed-in requests. Kept in app-private storage. */
     fun youTubeCookieFile(context: Context): File = File(context.noBackupFilesDir, "youtube-cookies.txt")
 
+    fun hasYouTubeCookies(context: Context): Boolean =
+        youTubeCookieFile(context).let { it.exists() && it.length() > 0L }
+
+    fun deleteYouTubeCookies(context: Context): Boolean = youTubeCookieFile(context).delete()
+
+    /**
+     * Validates and stores a Netscape-format cookies file exported from the owner's own browser.
+     * Returns an error message, or null when the file was saved.
+     */
+    fun saveYouTubeCookies(context: Context, text: String): String? {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return "The selected file is empty."
+        if (trimmed.length > 2_000_000) return "The selected file is too large to be a cookies file."
+
+        // Netscape lines are tab-separated. #HttpOnly_ lines are real cookies, so they count too.
+        val hasYouTubeCookie = trimmed.lineSequence().any { line ->
+            val isCookieLine = !line.startsWith("#") || line.startsWith("#HttpOnly_")
+            isCookieLine && line.contains("youtube.com") && line.count { it == '\t' } >= 6
+        }
+        if (!hasYouTubeCookie) {
+            return "No YouTube cookies were found in that file. Export cookies for youtube.com in Netscape format and try again."
+        }
+
+        youTubeCookieFile(context).writeText(trimmed + "\n")
+        return null
+    }
+
     @Volatile
     private var ytDlpReady = false
 

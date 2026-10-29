@@ -119,6 +119,7 @@ Status: yt-dlp integration written, not yet built or run on a device.
 
 Newest first. Each entry is one pushed step.
 
+- **2026-10-29: Cookies UI.** Settings has a "YouTube Cookies" card. It picks a Netscape cookies file through the system file picker, checks that it contains youtube.com cookies, and stores it at `noBackupFilesDir/youtube-cookies.txt`. Replace and Remove are supported. `hasYouTubeCookies` is kept in `GrabItUiState`.
 - **2026-10-29: yt-dlp integration.** Added youtubedl-android 0.18.1 (yt-dlp + FFmpeg). Links without a direct file now go to yt-dlp for video and audio. Optional YouTube cookies file is passed through `--cookies`. Parse-checked only; the Android build still needs running.
 - **2026-10-29: Download fix.** Removed the demo-file fallbacks from `MediaFileManager`. Downloads now save only real media of the selected type, check the Content-Type before saving, retry network drops with resume, pick the extension from the real type, and show a clear error when a link has no downloadable file. Compiled the Kotlin syntax with the Kotlin compiler bundled in Gradle: no parse errors. Full type-check and build still need the Android SDK.
 - **2026-10-29: Documentation.** Added `CONTEXT.md` and `README.md`. Reviewed the download pipeline and identified the demo-fallback root cause (section 3.1).

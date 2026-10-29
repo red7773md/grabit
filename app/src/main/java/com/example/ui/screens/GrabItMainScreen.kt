@@ -317,7 +317,10 @@ fun GrabItMainScreen(
                         onClearTempCache = { viewModel.clearTempCache() },
                         onClearAllHistory = { viewModel.clearAllHistory() },
                         onReplayOnboarding = { viewModel.replayOnboarding() },
-                        onOpenAboutClick = { showAboutScreen = true }
+                        onOpenAboutClick = { showAboutScreen = true },
+                        hasYouTubeCookies = uiState.hasYouTubeCookies,
+                        onImportYouTubeCookies = { viewModel.importYouTubeCookies(it) },
+                        onClearYouTubeCookies = { viewModel.clearYouTubeCookies() }
                     )
                 }
             }

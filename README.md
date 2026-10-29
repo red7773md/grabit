@@ -22,9 +22,15 @@ GrabIt is an Android app for saving media from a link into organised folders on 
 |---|---|
 | Direct links to media files (`.mp4`, `.mp3`, `.jpg`, and similar) | Supported |
 | TikTok links | Supported through a third-party resolver |
-| YouTube, Instagram, Facebook, X, Reddit, and other social pages | Metadata only. GrabIt can't extract the media file from these pages yet, so the download reports an error instead of saving a substitute file |
+| YouTube, Instagram, Facebook, X, Reddit, Vimeo, SoundCloud, and other pages | Video and audio through [yt-dlp](https://github.com/yt-dlp/yt-dlp), bundled with [youtubedl-android](https://github.com/yausername/youtubedl-android). Photos are not supported for these pages |
 
 GrabIt never saves a sample or placeholder file in place of the one you asked for. If a link can't be resolved, the download fails and the message says why.
+
+### YouTube cookies (optional)
+
+Some YouTube videos need a signed-in session. These include age-restricted, members-only, and videos that YouTube has flagged for bot checks. To use them, export cookies for `youtube.com` from your own browser in Netscape format, then add the file in **Settings → YouTube Cookies**. The file is kept in app-private storage. It contains your Google session, so don't share it.
+
+yt-dlp needs updating when YouTube changes. If downloads from a site start failing, update yt-dlp first.
 
 ## Requirements
 

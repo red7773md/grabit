@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -42,6 +45,9 @@ fun SettingsScreen(
     onClearAllHistory: () -> Unit,
     onReplayOnboarding: () -> Unit,
     onOpenAboutClick: () -> Unit = {},
+    hasYouTubeCookies: Boolean = false,
+    onImportYouTubeCookies: (Uri) -> Unit = {},
+    onClearYouTubeCookies: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showQualityDialogFor by remember { mutableStateOf<MediaType?>(null) }
@@ -322,6 +328,45 @@ fun SettingsScreen(
                     onCheckedChange = { onToggleTheme() },
                     testTag = "dark_mode_switch"
                 )
+            }
+        }
+
+        // --- 4b. YOUTUBE COOKIES (OPTIONAL) ---
+        item {
+            val cookiePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                uri?.let(onImportYouTubeCookies)
+            }
+            SettingsSectionCard(
+                title = "YouTube Cookies (optional)",
+                icon = Icons.Default.Lock,
+                iconTint = GrabItTeal
+            ) {
+                Text(
+                    text = "Needed only for age-restricted, members-only, or bot-checked YouTube videos. " +
+                        "Export cookies for youtube.com from your own browser in Netscape format. " +
+                        "The file stays on this device. Anyone with it can use your Google session, so don't share it.",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = if (hasYouTubeCookies) "Cookies file saved" else "No cookies file",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (hasYouTubeCookies) GrabItTeal else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { cookiePicker.launch(arrayOf("*/*")) },
+                        modifier = Modifier.testTag("import_youtube_cookies_button")
+                    ) {
+                        Text(if (hasYouTubeCookies) "Replace file" else "Choose file")
+                    }
+                    if (hasYouTubeCookies) {
+                        OutlinedButton(onClick = onClearYouTubeCookies) {
+                            Text("Remove")
+                        }
+                    }
+                }
             }
         }
 
