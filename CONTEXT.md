@@ -60,7 +60,19 @@ MainActivity            Receives share intents (text/plain), hosts Compose UI
    - Generic types (`application/octet-stream` and similar) are accepted only when the URL ends in a matching media extension.
    - Streams to `<name>_<id6>.part` and supports HTTP Range resume. After a network error it retries up to 3 times, resuming from the bytes already written.
    - Renames `.part` to the final file, using the extension from the Content-Type (then the URL, then the type default).
-   - If nothing works, throws `MediaResolutionException` with a user-facing message. The ViewModel shows it as the download error.
+   - If no direct file is found and the type is video or audio, the link is handed to **yt-dlp** (see section 2a).
+   - If that also fails, throws `MediaResolutionException` with a user-facing message. The ViewModel shows it as the download error.
+
+### 2a. yt-dlp path
+
+- Library: `io.github.junkfood02.youtubedl-android` 0.18.1 (`library` and `ffmpeg` artifacts). It bundles yt-dlp, Python and FFmpeg for Android. Source: https://github.com/yausername/youtubedl-android
+- `ensureYtDlpReady` initialises `YoutubeDL` and `FFmpeg` once per process.
+- Video: best MP4 video plus M4A audio, capped at the selected height, merged to MP4.
+- Audio: `-x` with the selected format (MP3 320K or 128K, M4A, or FLAC).
+- Progress: yt-dlp's callback runs on a reader thread, so updates go through a conflated `Channel` to the coroutine.
+- Pause/cancel: when the coroutine job is no longer active, the callback calls `destroyProcessById(item.id)`. yt-dlp resumes partial files on the next start.
+- Cookies: if `noBackupFilesDir/youtube-cookies.txt` exists, it is passed with `--cookies`. This is optional. It is needed for age-restricted, members-only, or bot-checked YouTube videos.
+- yt-dlp breaks when sites change. Keep the library updated (`YoutubeDL.updateYoutubeDL`).
 5. **Persist**: the finished item is saved to Room and shown in History.
 
 ---
@@ -79,9 +91,9 @@ The demo URLs and the silent fallback were removed. Candidates are now checked f
 
 ### 3.2 Social platforms can't be downloaded
 
-YouTube, Instagram, Facebook, X, Reddit and similar pages do not expose a plain media file URL in their HTML. A page-level HTTP GET cannot produce the real video or audio stream. Only TikTok has a working resolver (via a third-party API). The rest only give metadata (title and thumbnail) and then fail.
+YouTube, Instagram, Facebook, X, Reddit and similar pages do not expose a plain media file URL in their HTML. A page-level HTTP GET cannot produce the real stream. Those links now go to yt-dlp (section 2a). TikTok has its own resolver (tikwm API) and is tried first.
 
-Downloading from these platforms also usually breaks their terms of service, and the project plan mentions bot-protection bypasses. The fix below does not add any such bypass. Links that do not expose a downloadable file now fail with a clear message instead of a demo file.
+Status: yt-dlp integration written, not yet built or run on a device.
 
 ### 3.3 Other notes
 
@@ -97,7 +109,8 @@ Downloading from these platforms also usually breaks their terms of service, and
 
 - Keep changes small and focused. Commit and push one logical step at a time, and say what changed in each commit message.
 - Do not add demo or placeholder media URLs as download sources. If a link cannot be resolved, fail with a message that tells the user why.
-- Do not add anti-bot or DRM bypass logic.
+- **Scope decision (2026-10-29):** GrabIt is a personal app for its owner, not for Play Store distribution. yt-dlp is used for YouTube and other sites, and the owner may supply their own YouTube cookies. Play policies and YouTube's terms conflict with this, so do not publish the app with this feature enabled. Do not add logic that hides or bypasses sign-in gates for other people's accounts.
+- Do not add DRM-circumvention logic.
 - Update this file and `README.md` when behaviour, file layout, or known issues change.
 
 ---
@@ -106,6 +119,7 @@ Downloading from these platforms also usually breaks their terms of service, and
 
 Newest first. Each entry is one pushed step.
 
+- **2026-10-29: yt-dlp integration.** Added youtubedl-android 0.18.1 (yt-dlp + FFmpeg). Links without a direct file now go to yt-dlp for video and audio. Optional YouTube cookies file is passed through `--cookies`. Parse-checked only; the Android build still needs running.
 - **2026-10-29: Download fix.** Removed the demo-file fallbacks from `MediaFileManager`. Downloads now save only real media of the selected type, check the Content-Type before saving, retry network drops with resume, pick the extension from the real type, and show a clear error when a link has no downloadable file. Compiled the Kotlin syntax with the Kotlin compiler bundled in Gradle: no parse errors. Full type-check and build still need the Android SDK.
 - **2026-10-29: Documentation.** Added `CONTEXT.md` and `README.md`. Reviewed the download pipeline and identified the demo-fallback root cause (section 3.1).
 - **Earlier (before this log):** App scaffold, Compose UI, Room history, share intent, batch mode, and TikTok/oEmbed/OpenGraph metadata were in place. The last commit before this log is `96b61ea feat: improve share intent handling and add tests`.

@@ -16,6 +16,10 @@ import com.example.model.MediaType
 import com.example.model.Platform
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -23,6 +27,10 @@ import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import com.yausername.ffmpeg.FFmpeg
+import com.yausername.youtubedl_android.YoutubeDL
+import com.yausername.youtubedl_android.YoutubeDLException
+import com.yausername.youtubedl_android.YoutubeDLRequest
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -328,6 +336,7 @@ object MediaFileManager {
      * Candidate links are tried in order: the resolved media URL first, then the link the user gave.
      * A candidate is saved only when the server returns media of the selected type. Web pages and
      * mismatched media are rejected, so GrabIt never saves a placeholder or demo file in their place.
+     * If no direct file is found (and the type is video or audio), the link is handed to yt-dlp.
      *
      * @throws MediaResolutionException with a user-facing message when no usable file is found.
      */
@@ -353,22 +362,171 @@ object MediaFileManager {
         val baseName = "${sanitizedTitle}_${item.id.take(6)}"
         val partFile = File(targetDir, "$baseName.part")
 
-        val saved = downloadFirstMatchingCandidate(
-            candidates = buildDownloadCandidates(item),
-            partFile = partFile,
-            item = item,
-            onProgress = onProgress
-        )
+        try {
+            // 1. Direct file links, and media that a page points to with a <video>, <audio> or og: tag.
+            val saved = downloadFirstMatchingCandidate(
+                candidates = buildDownloadCandidates(item),
+                partFile = partFile,
+                item = item,
+                onProgress = onProgress
+            )
 
-        val finalFile = File(targetDir, baseName + extensionFor(saved.contentType, saved.url, item.mediaType))
-        if (finalFile.exists()) {
-            finalFile.delete()
+            val finalFile = File(targetDir, baseName + extensionFor(saved.contentType, saved.url, item.mediaType))
+            if (finalFile.exists()) {
+                finalFile.delete()
+            }
+            if (!partFile.renameTo(finalFile)) {
+                partFile.copyTo(finalFile, overwrite = true)
+                partFile.delete()
+            }
+            finalFile
+        } catch (directError: MediaResolutionException) {
+            // 2. Pages that don't expose a plain file (YouTube, Instagram, and so on): let yt-dlp handle them.
+            if (item.mediaType == MediaType.PHOTO) throw directError
+            downloadWithYtDlp(context, item, targetDir, baseName, onProgress)
         }
-        if (!partFile.renameTo(finalFile)) {
-            partFile.copyTo(finalFile, overwrite = true)
-            partFile.delete()
+    }
+
+    /** Netscape-format cookies file that yt-dlp can use for signed-in requests. Kept in app-private storage. */
+    fun youTubeCookieFile(context: Context): File = File(context.noBackupFilesDir, "youtube-cookies.txt")
+
+    @Volatile
+    private var ytDlpReady = false
+
+    private fun ensureYtDlpReady(context: Context) {
+        if (ytDlpReady) return
+        synchronized(this) {
+            if (ytDlpReady) return
+            try {
+                YoutubeDL.getInstance().init(context.applicationContext)
+                FFmpeg.getInstance().init(context.applicationContext)
+                ytDlpReady = true
+            } catch (e: Exception) {
+                throw MediaResolutionException("yt-dlp couldn't start on this device: ${e.message ?: "unknown error"}")
+            }
         }
-        finalFile
+    }
+
+    /**
+     * Downloads through yt-dlp. It writes `<baseName>.<ext>` into [targetDir], and it resumes partial
+     * downloads by itself. Progress comes from a callback on a reader thread, so it is forwarded through a
+     * channel to the coroutine. Pausing or cancelling the download kills the yt-dlp process.
+     */
+    private suspend fun downloadWithYtDlp(
+        context: Context,
+        item: DownloadItem,
+        targetDir: File,
+        baseName: String,
+        onProgress: suspend (StreamProgressUpdate) -> Unit
+    ): File {
+        ensureYtDlpReady(context)
+
+        val cookies = youTubeCookieFile(context).takeIf { it.exists() && it.length() > 0L }
+        val request = buildYtDlpRequest(item, File(targetDir, "$baseName.%(ext)s").absolutePath, cookies)
+
+        val outerJob: Job? = currentCoroutineContext()[Job]
+        val updates = Channel<StreamProgressUpdate>(Channel.CONFLATED)
+
+        coroutineScope {
+            launch {
+                for (update in updates) onProgress(update)
+            }
+            try {
+                withContext(Dispatchers.IO) {
+                    YoutubeDL.getInstance().execute(
+                        request,
+                        item.id,
+                        callback = { percent, etaSeconds, line ->
+                            if (outerJob?.isActive == false) {
+                                YoutubeDL.getInstance().destroyProcessById(item.id)
+                            }
+                            val speed = Regex("""at\s+(\S+/s)""").find(line)?.groupValues?.get(1) ?: "Downloading"
+                            val total = item.fileSize
+                            updates.trySend(
+                                StreamProgressUpdate(
+                                    downloadedBytes = if (total > 0L) (total * percent / 100f).toLong() else 0L,
+                                    totalBytes = total,
+                                    progress = (percent / 100f).coerceIn(0.01f, 0.99f),
+                                    speedLabel = speed,
+                                    etaLabel = if (etaSeconds > 0L) formatEta(etaSeconds) else "Streaming..."
+                                )
+                            )
+                        }
+                    )
+                }
+            } catch (_: YoutubeDL.CanceledException) {
+                throw CancellationException("Download cancelled")
+            } catch (e: YoutubeDLException) {
+                if (outerJob?.isActive == false) throw CancellationException("Download cancelled")
+                throw MediaResolutionException(friendlyYtDlpError(e.message))
+            } finally {
+                updates.close()
+            }
+        }
+
+        val pattern = Regex("^${Regex.escape(baseName)}\\.(mp4|mkv|webm|mp3|m4a|flac|ogg|opus|wav|aac)$")
+        return targetDir.listFiles()
+            ?.filter { pattern.matches(it.name) }
+            ?.maxByOrNull { it.lastModified() }
+            ?: throw MediaResolutionException("yt-dlp finished, but the output file wasn't found.")
+    }
+
+    private fun buildYtDlpRequest(item: DownloadItem, outputTemplate: String, cookies: File?): YoutubeDLRequest {
+        val request = YoutubeDLRequest(item.sourceUrl)
+            .addOption("--no-playlist")
+            .addOption("-o", outputTemplate)
+        cookies?.let { request.addOption("--cookies", it.absolutePath) }
+
+        when (item.mediaType) {
+            MediaType.VIDEO -> {
+                val height = ytDlpHeight(item.quality)
+                val limit = if (height != null) "[height<=$height]" else ""
+                // Prefer MP4/M4A streams so they can be merged without re-encoding.
+                request.addOption("-f", "bv*[ext=mp4]$limit+ba[ext=m4a]/bv*$limit+ba/b$limit/best")
+                request.addOption("--merge-output-format", "mp4")
+            }
+            MediaType.AUDIO -> {
+                val (format, quality) = ytDlpAudioFormat(item.quality)
+                request.addOption("-x")
+                request.addOption("--audio-format", format)
+                request.addOption("--audio-quality", quality)
+            }
+            MediaType.PHOTO -> throw MediaResolutionException(
+                "Photos can't be downloaded from this link. Choose Video or Audio."
+            )
+        }
+        return request
+    }
+
+    private fun ytDlpHeight(quality: String): Int? {
+        Regex("(\\d{3,4})p", RegexOption.IGNORE_CASE).find(quality)?.let {
+            return it.groupValues[1].toInt()
+        }
+        return if (quality.contains("4K", ignoreCase = true)) 2160 else null
+    }
+
+    private fun ytDlpAudioFormat(quality: String): Pair<String, String> = when {
+        quality.contains("FLAC", ignoreCase = true) -> "flac" to "0"
+        quality.contains("M4A", ignoreCase = true) -> "m4a" to "256K"
+        quality.contains("128") -> "mp3" to "128K"
+        else -> "mp3" to "320K"
+    }
+
+    private fun friendlyYtDlpError(raw: String?): String {
+        val text = raw.orEmpty()
+        return when {
+            text.contains("Sign in to confirm", ignoreCase = true) ||
+                text.contains("not a bot", ignoreCase = true) ->
+                "YouTube asked for sign-in verification. Add a YouTube cookies file in Settings and try again."
+            text.contains("Private video", ignoreCase = true) -> "This video is private."
+            text.contains("Video unavailable", ignoreCase = true) -> "This video is unavailable."
+            text.contains("Unsupported URL", ignoreCase = true) -> "yt-dlp doesn't support this link."
+            else -> text.lineSequence()
+                .map { it.trim() }
+                .lastOrNull { it.startsWith("ERROR", ignoreCase = true) }
+                ?.take(240)
+                ?: "yt-dlp couldn't download this link."
+        }
     }
 
     private fun buildDownloadCandidates(item: DownloadItem): List<String> {

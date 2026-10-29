@@ -21,6 +21,11 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    // yt-dlp ships native Python and FFmpeg binaries. Limit ABIs to keep the APK size reasonable.
+    ndk {
+      abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+    }
   }
 
   signingConfigs {
@@ -117,6 +122,9 @@ dependencies {
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  // yt-dlp (youtubedl-android) for sites that don't expose plain media files, such as YouTube.
+  implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+  implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)
